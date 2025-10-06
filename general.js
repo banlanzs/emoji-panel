@@ -5,6 +5,7 @@
 // @description  try to take over the world!
 // @author       banlan
 // @match        https://www.deepflood.com/*
+// @match        https://www.nodeseek.com/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=www.deepflood.com
 // @grant        GM_getValue
 // @grant        GM_setValue
