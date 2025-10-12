@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      2.8
 // @description  从其它页面跳转到话题首页 /t/topic/786046 才刷新一次；避免滚动分页误触发；并让所有话题链接在新标签打开
-// @author       banlan
+// @author       ChatGPT
 // @match        https://linux.do/*
 // @match        https://www.nodeloc.com/*
 // @match        https://idcflare.com/*
@@ -99,456 +99,535 @@ document.addEventListener("click", (e) => {
 
 
 //-------------------------------------------------------------------//
-    // ---- 新增：拦截话题点击，在（点击楼层回复和标题除外）新标签打开 ----
-document.addEventListener('click', function (e) {
-  // 只处理左键普通点击
-  if (e.defaultPrevented) return;
-  if (e.button !== 0) return;
-  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    // 更稳健的楼层标记：支持 topic-owner / 从中间楼层进入 + localStorage 缓存
+  if (window.top !== window) {
+    // 避免在 iframe 中执行
+  } else {
+    const style = document.createElement('style');
+    style.textContent = `
+      .tm-floor-label {
+        display: inline-block;
+        margin-left: 6px;
+        font-size: 12px;
+        color: #888;
+        line-height: 1;
+        vertical-align: middle;
+        border: 0;
+        background: transparent;
+        padding: 2px 6px;
+        border-radius: 3px;
+        cursor: pointer;
+        user-select: none;
+      }
+      .tm-floor-label:hover {
+        background: rgba(0,0,0,0.04);
+      }
+      .tm-floor-label.tm-op {
+        color: #fff;
+        background: rgba(0,0,0,0.6);
+      }
+      .tm-floor-label.tm-op:hover {
+        background: rgba(0,0,0,0.7);
+      }
+    `;
+    document.head.appendChild(style);
 
-  const a = e.target.closest('a[href]');
-  if (!a) return;
+    let OP_NAME = null;
+    let pendingPosts = new Set();
+    let debounceTimer = null;
+    const DEBOUNCE_MS = 60;
+    let observer = null;
 
-  const href = a.href;
-  const currentHost = location.hostname;
-  const isSameOrigin = a.hostname === currentHost;
-
-  // 只处理白名单域名
-  const allowedDomains = [
-    'linux.do', 
-    'clochat.com', 
-    'idcflare.com',
-    'www.nodeloc.com'
-    ];
-  if (!isSameOrigin || !allowedDomains.includes(currentHost)) return;
-
-  // 当前话题页 & 点击的还是同一话题 -> 放行
-  const currentTopicMatch = location.pathname.match(/^\/t\/topic\/(\d+)(?:\/\d+)?$/);
-  const clickedTopicMatch = a.pathname.match(/^\/t\/topic\/(\d+)(?:\/(\d+))?$/);
-  if (a.closest('h1') && currentTopicMatch && clickedTopicMatch && currentTopicMatch[1] === clickedTopicMatch[1]) return;
-  if (currentTopicMatch && clickedTopicMatch && currentTopicMatch[1] === clickedTopicMatch[1]) return;
-
-  // 需要强制新标签打开的路径
-  const openInNewTabPatterns = [
-    /^\/t\/topic\/\d+(\/\d+)?(\?.*)?$/,
-    /^\/faq$/,
-    /^\/leaderboard$/,
-    /^\/tags$/,
-    /^\/about$/,
-    /^\/top$/,
-  ];
-
-  if (openInNewTabPatterns.some(p => p.test(a.pathname))) {
-    // 关键三连：阻止一切默认和冒泡
-    e.preventDefault();
-    e.stopPropagation();
-    e.stopImmediatePropagation();
-
-    // 显式设置属性，避免浏览器默认行为混淆
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-
-    // 打开新标签
-    window.open(href, '_blank', 'noopener');
-  }
-}, true);  // 捕获阶段
-
-
-//-------------------------------------------------------------------//
-    // ---- 新增：返回顶部按钮 ----
-    function addBackToTop() {
-        const btn = document.createElement('div');
-        btn.innerText = '↑ 顶部';
-        Object.assign(btn.style, {
-            position: 'fixed',
-            bottom: '75px',
-            right: '30px',
-            background: '#007aff',
-            color: '#fff',
-            padding: '10px 14px',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontSize: '14px',
-            boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
-            zIndex: 9999,
-            opacity: 0,
-            transition: 'opacity 0.3s',
-        });
-        btn.addEventListener('click', () => {
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-        });
-        document.body.appendChild(btn);
-
-        window.addEventListener('scroll', () => {
-            if (window.scrollY > 200) {
-                btn.style.opacity = 1;
-            } else {
-                btn.style.opacity = 0;
-            }
-        });
+    // ---------------- 缓存相关 ----------------
+    const CACHE_TTL = 24 * 60 * 60 * 1000; // 24h
+    function getTopicId() {
+      const m = window.location.pathname.match(/\/t\/[^/]+\/(\d+)/);
+      return m ? m[1] : null;
     }
 
-    // 等待 DOM 就绪
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', addBackToTop);
-    } else {
-        addBackToTop();
-    }
-
-
-// 更稳健的楼层标记：支持 topic-owner / 从中间楼层进入 + localStorage 缓存
-if (window.top !== window) {
-  // 避免在 iframe 中执行
-} else {
-  const style = document.createElement('style');
-  style.textContent = `
-    .tm-floor-label {
-      display: inline-block;
-      margin-left: 6px;
-      font-size: 12px;
-      color: #888;
-      line-height: 1;
-      vertical-align: middle;
-      pointer-events: none;
-    }
-    .tm-floor-label.tm-op {
-      color: #fff;
-      background: rgba(0,0,0,0.6);
-      padding: 2px 6px;
-      border-radius: 3px;
-    }
-  `;
-  document.head.appendChild(style);
-
-  let OP_NAME = null;
-  let pendingPosts = new Set();
-  let debounceTimer = null;
-  const DEBOUNCE_MS = 60;
-  let observer = null;
-
-  // ---------------- 缓存相关 ----------------
-  const CACHE_TTL = 24 * 60 * 60 * 1000; // 24h
-  function getTopicId() {
-    const m = window.location.pathname.match(/\/t\/[^/]+\/(\d+)/);
-    return m ? m[1] : null;
-  }
-
-  function loadCachedOP() {
-    try {
-      const topicId = getTopicId();
-      if (!topicId) return null;
-      const raw = localStorage.getItem("topic-op-" + topicId);
-      if (!raw) return null;
-      const data = JSON.parse(raw);
-      if (Date.now() - data.ts > CACHE_TTL) {
-        localStorage.removeItem("topic-op-" + topicId);
+    function loadCachedOP() {
+      try {
+        const topicId = getTopicId();
+        if (!topicId) return null;
+        const raw = localStorage.getItem("topic-op-" + topicId);
+        if (!raw) return null;
+        const data = JSON.parse(raw);
+        if (Date.now() - data.ts > CACHE_TTL) {
+          localStorage.removeItem("topic-op-" + topicId);
+          return null;
+        }
+        return data.username; // 只返回 username 用于判断
+      } catch (e) {
         return null;
       }
-      return data.username; // 只返回 username 用于判断
-    } catch (e) {
-      return null;
     }
-  }
 
-  function saveCachedOP(username, fullname = null) {
-    try {
-      const topicId = getTopicId();
-      if (!topicId) return;
-      const data = { username, fullname, ts: Date.now() };
-      localStorage.setItem("topic-op-" + topicId, JSON.stringify(data));
-    } catch (e) {}
-  }
-
-  // ---------------- 获取用户名 ----------------
-  function getUserCardName(post) {
-    try {
-      const a = post.querySelector('.topic-meta-data a[data-user-card]');
-      if (a) {
-        const cardUser = a.getAttribute('data-user-card');
-        if (cardUser && cardUser.trim()) {
-          return cardUser.trim();
-        }
-      }
-      const fallback = post.getAttribute('data-user-card');
-      return fallback ? fallback.trim() : '';
-    } catch (e) {
-      return '';
-    }
-  }
-
-  function getAnchorForPost(post) {
-    return (
-      post.querySelector('.post-info.post-date') ||
-      post.querySelector('.topic-meta-data .post-info') ||
-      post.querySelector('.topic-meta-data') ||
-      null
-    );
-  }
-
-  function makeLabelText(isOP, floor) {
-    return isOP ? (floor === 1 ? '楼主' : `楼主 · ${floor} 楼`) : `${floor} 楼`;
-  }
-
-  // ---------------- 更稳健的获取楼主用户名（支持 fullname） ----------------
-  async function fetchOPInfoFromFirstPost() {
-    try {
-      const url = new URL(window.location.href);
-      const parts = url.pathname.split('/');
-      if (/^\d+$/.test(parts[parts.length - 1])) {
-        parts[parts.length - 1] = '1';
-      } else {
-        parts.push('1');
-      }
-      const firstUrl = url.origin + parts.join('/');
-
-      const resp = await fetch(firstUrl, { credentials: 'include' });
-      const html = await resp.text();
-      const doc = new DOMParser().parseFromString(html, 'text/html');
-
-      const firstPost = doc.querySelector('.topic-post[data-post-number="1"]');
-      if (firstPost) {
-        const a = firstPost.querySelector('.topic-meta-data a[data-user-card]');
-        const username = a?.getAttribute('data-user-card')?.trim() || null;
-
-        // full name
-        let fullname = null;
-        const fullSpan = firstPost.querySelector('.topic-meta-data .full-name');
-        if (fullSpan) {
-          fullname = fullSpan.textContent.trim();
-        } else if (a?.getAttribute('title')) {
-          fullname = a.getAttribute('title').trim();
-        }
-
-        return { username, fullname };
-      }
-    } catch (e) {
-      console.error('fetchOPInfoFromFirstPost error:', e);
-    }
-    return { username: null, fullname: null };
-  }
-
-  // ---------------- topic-owner 兜底 ----------------
-  function hasNonEmptyPseudoContent(el, pseudo) {
-    try {
-      const cs = window.getComputedStyle(el, pseudo);
-      if (!cs) return false;
-      let content = cs.getPropertyValue('content');
-      if (!content) return false;
-      content = content.trim();
-      if (content === 'none' || content === 'normal') return false;
-      const stripped = content.replace(/^['"]|['"]$/g, '').trim();
-      return stripped.length > 0;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  function isPostTopicOwner(post) {
-    try {
-      if (post.classList && post.classList.contains('topic-owner')) return true;
-      if (post.closest && post.closest('.topic-owner')) return true;
-
-      const candidates = [
-        post.querySelector('.topic-body .contents > .cooked'),
-        post.querySelector('.cooked'),
-        post.querySelector('.topic-meta-data .cooked'),
-        post.querySelector('.topic-meta-data'),
-      ];
-      for (const el of candidates) {
-        if (!el) continue;
-        if (hasNonEmptyPseudoContent(el, '::after')) return true;
-        if (hasNonEmptyPseudoContent(el, '::before')) return true;
-      }
-    } catch (e) {}
-    return false;
-  }
-
-  // ---------------- 处理楼层 ----------------
-  function processBatch(posts) {
-    if (!posts || posts.length === 0) return false;
-
-    for (const post of posts) {
+    function saveCachedOP(username, fullname = null) {
       try {
-        if (!post || post.nodeType !== 1) continue;
-        const numStr = post.getAttribute && post.getAttribute('data-post-number');
-        const floor = numStr ? parseInt(numStr, 10) : NaN;
-        if (!floor && floor !== 0) continue;
-
-        const anchor = getAnchorForPost(post);
-        if (!anchor) continue;
-
-        const curUser = getUserCardName(post);
-
-        const isOP =
-          (!!OP_NAME && curUser === OP_NAME) ||
-          isPostTopicOwner(post);
-
-        let label = null;
-        try {
-          label = anchor.querySelector(':scope > .tm-floor-label');
-        } catch (e) {
-          for (const ch of Array.from(anchor.children || [])) {
-            if (ch.classList && ch.classList.contains('tm-floor-label')) {
-              label = ch;
-              break;
-            }
-          }
-        }
-
-        const desiredText = makeLabelText(isOP, floor);
-
-        if (!label) {
-          label = document.createElement('span');
-          label.className = 'tm-floor-label' + (isOP ? ' tm-op' : '');
-          label.textContent = desiredText;
-          anchor.appendChild(label);
-        } else {
-          if (label.textContent !== desiredText) {
-            label.textContent = desiredText;
-          }
-          if (isOP) {
-            if (!label.classList.contains('tm-op')) label.classList.add('tm-op');
-          } else {
-            if (label.classList.contains('tm-op')) label.classList.remove('tm-op');
-          }
-        }
-      } catch (err) {
-        console.error('processBatch post error:', err);
-      }
-    }
-  }
-
-  function doProcessPosts(posts) {
-    if (!posts || posts.length === 0) return;
-    if (observer) observer.disconnect();
-    processBatch(posts);
-    if (observer) observer.observe(document.body, { childList: true, subtree: true });
-  }
-
-  // ---------------- 初始化 ----------------
-  async function initAll() {
-    const topicId = getTopicId();
-    if (!topicId) return;
-
-    // 优先从缓存中读取
-    if (!OP_NAME) {
-      const cached = loadCachedOP();
-      if (cached) {
-        OP_NAME = cached;
-        console.log('✅ 从缓存找到楼主用户名：', OP_NAME);
-      }
-    }
-
-    // 若缓存未命中，尝试从第一页获取
-    if (!OP_NAME) {
-      const { username, fullname } = await fetchOPInfoFromFirstPost();
-      if (username) {
-        OP_NAME = username;
-        saveCachedOP(OP_NAME, fullname);
-        console.log('✅ 成功找到楼主用户名并缓存：', OP_NAME);
-        if (fullname) console.log('ℹ️ 楼主全名：', fullname);
-      } else {
-        console.warn('⚠ 未能从 /1 获取楼主信息，尝试伪元素兜底…');
-        const el = document.querySelector('.topic-owner');
-        if (el) {
-          const content = window.getComputedStyle(el, '::after').content;
-          if (content && content !== 'none' && content !== '""') {
-            const a = el.querySelector('a[data-user-card]');
-            if (a) {
-              OP_NAME = a.getAttribute('data-user-card')?.trim() || null;
-              console.log('✅ 兜底从伪元素检测到楼主用户名：', OP_NAME);
-            }
-          }
-        }
-      }
-    }
-
-    const all = Array.from(document.querySelectorAll('.topic-post[data-post-number]'));
-    if (all.length) {
-      doProcessPosts(all);
-    }
-  }
-
-  // ---------------- MutationObserver ----------------
-  function onMutations(mutations) {
-    for (const m of mutations) {
-      if (m.addedNodes && m.addedNodes.length) {
-        for (const n of m.addedNodes) {
-          if (!n || n.nodeType !== 1) continue;
-          try {
-            if (n.matches && n.matches('.topic-post')) {
-              pendingPosts.add(n);
-            } else if (n.querySelectorAll) {
-              const inner = n.querySelectorAll('.topic-post');
-              if (inner && inner.length) inner.forEach(p => pendingPosts.add(p));
-            }
-          } catch (e) {}
-        }
-      }
-      try {
-        if (m.target && m.target.closest) {
-          const p = m.target.closest('.topic-post');
-          if (p) pendingPosts.add(p);
-        }
+        const topicId = getTopicId();
+        if (!topicId) return;
+        const data = { username, fullname, ts: Date.now() };
+        localStorage.setItem("topic-op-" + topicId, JSON.stringify(data));
       } catch (e) {}
     }
 
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      const posts = Array.from(pendingPosts);
-      pendingPosts.clear();
-      if (posts.length) doProcessPosts(posts);
-    }, DEBOUNCE_MS);
+    // ---------------- 获取用户名 ----------------
+    function getUserCardName(post) {
+      try {
+        const a = post.querySelector('.topic-meta-data a[data-user-card]');
+        if (a) {
+          const cardUser = a.getAttribute('data-user-card');
+          if (cardUser && cardUser.trim()) {
+            return cardUser.trim();
+          }
+        }
+        const fallback = post.getAttribute('data-user-card');
+        return fallback ? fallback.trim() : '';
+      } catch (e) {
+        return '';
+      }
+    }
+
+    function getAnchorForPost(post) {
+      return (
+        post.querySelector('.post-info.post-date') ||
+        post.querySelector('.topic-meta-data .post-info') ||
+        post.querySelector('.topic-meta-data') ||
+        null
+      );
+    }
+
+    function makeLabelText(isOP, floor) {
+      return isOP ? (floor === 1 ? '楼主' : `楼主 · ${floor} 楼`) : `${floor} 楼`;
+    }
+
+    // ---------------- 复制逻辑（支持图片，HTML + Markdown 双通道） ----------------
+async function copyToClipboardPayload(payload) {
+  // payload: { html: string, text: string }
+  // 1) 先尝试剪贴板 HTML + 纯文本
+  if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+    try {
+      const htmlBlob = new Blob([payload.html], { type: 'text/html' });
+      const textBlob = new Blob([payload.text], { type: 'text/plain' });
+      const item = new ClipboardItem({ 'text/html': htmlBlob, 'text/plain': textBlob });
+      await navigator.clipboard.write([item]);
+      return true;
+    } catch (e) {
+      // 继续用 writeText 回退
+    }
   }
 
-  observer = new MutationObserver(onMutations);
-  observer.observe(document.body, { childList: true, subtree: true });
-
+  // 2) 回退：纯文本写入
   try {
-    initAll();
+    await navigator.clipboard.writeText(payload.text);
+    return true;
   } catch (e) {
-    console.error('initAll error', e);
+    // 3) 最后回退：execCommand
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = payload.text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch (err) {
+      console.error('复制失败:', err);
+      return false;
+    }
   }
 }
 
+function absolutizeUrl(url) {
+  try {
+    return new URL(url, location.origin).href;
+  } catch {
+    return url;
+  }
+}
 
+function cookedToHtmlAndMarkdown(cookedEl) {
+  // 先克隆再“清洗”无用节点，防止复制 meta/尺寸等信息
+  const clone = cookedEl.cloneNode(true);
 
+  // 移除 Discourse 的装饰/障碍节点
+  clone.querySelectorAll('.lightbox-wrapper .meta, .cooked-selection-barrier, svg').forEach(n => n.remove());
+  // 去掉纯空 <p>（既没文本也没媒体）
+  clone.querySelectorAll('p').forEach(p => {
+    if (!p.textContent.trim() && !p.querySelector('img, video, iframe')) p.remove();
+  });
 
+  // 绝对化链接与图片地址
+  clone.querySelectorAll('a[href]').forEach(a => {
+    a.setAttribute('href', absolutizeUrl(a.getAttribute('href')));
+  });
+  clone.querySelectorAll('img[src]').forEach(img => {
+    img.setAttribute('src', absolutizeUrl(img.getAttribute('src')));
+  });
+  // lightbox：优先使用原图 href
+  clone.querySelectorAll('.lightbox-wrapper a.lightbox').forEach(a => {
+    const href = a.getAttribute('href') || a.getAttribute('data-download-href');
+    if (href) a.setAttribute('href', absolutizeUrl(href));
+    const img = a.querySelector('img');
+    if (img && !img.getAttribute('alt')) {
+      const metaName = a.querySelector('.filename')?.textContent?.trim();
+      const title = a.getAttribute('title') || metaName || 'image';
+      img.setAttribute('alt', title);
+    }
+  });
 
-//楼层显示2     .topic-post:not(:first-child):before {
-if (window.top !== window) {
-        return;
+  // 富文本（HTML）通道：清洗后的 innerHTML
+  const html = `<div>${clone.innerHTML}</div>`;
+
+  // Markdown 通道：按 DOM 顺序序列化（遇图即时输出）
+  function toMD(node) {
+    if (node.nodeType === Node.TEXT_NODE) return node.nodeValue;
+
+    if (node.nodeType !== 1) return '';
+    const el = node;
+
+    // 处理 lightbox 图片（优先原图）
+    if (el.matches && el.matches('.lightbox-wrapper a.lightbox')) {
+      const img = el.querySelector('img');
+      let href = el.getAttribute('href') || el.getAttribute('data-download-href') || (img && img.getAttribute('src'));
+      if (!href) return '';
+      href = absolutizeUrl(href);
+      const alt =
+        (img && (img.getAttribute('alt') || img.getAttribute('title'))) ||
+        el.getAttribute('title') ||
+        el.querySelector('.filename')?.textContent?.trim() ||
+        '';
+      return `![${alt}](${href})`;
     }
 
-    const styles = `
-    .topic-post {
-        position: relative;
+    // 直接裸露的 <img>
+    if (el.tagName === 'IMG') {
+      const src = el.getAttribute('src');
+      if (!src) return '';
+      const alt = el.getAttribute('alt') || el.getAttribute('title') || '';
+      return `![${alt}](${absolutizeUrl(src)})`;
     }
 
-    .topic-post:before {
-        position: absolute;
-        top: 0;
-        right: calc(100% - 1px);
-        font-size: 13px;
-        min-width: var(--d-main-content-gap);
-        height: 2em;
-        line-height: 2em;
-        text-align: center;
-        color: var(--primary-medium);
-        border: 1px solid var(--content-border-color);
-        content: attr(data-post-number) !important;
-    }
-    `
+    // 换行
+    if (el.tagName === 'BR') return '\n';
 
-    if ('GM_addStyle' in window) {
-        GM_addStyle(styles);
-    } else if ('GM' in window) {
-        GM.addStyle(styles);
-    } else {
-        const style = document.createElement('style');
-        style.textContent = styles;
-        document.head.appendChild(style);
+    // 块级元素：包裹换行
+    const BLOCKS = new Set(['P','DIV','SECTION','ARTICLE','HEADER','FOOTER','MAIN',
+                            'UL','OL','LI','H1','H2','H3','H4','H5','H6','PRE','BLOCKQUOTE','FIGURE']);
+    let content = Array.from(el.childNodes).map(toMD).join('');
+
+    if (el.tagName === 'LI') {
+      content = content.trim();
+      return content ? `- ${content}\n` : '';
     }
+
+    if (BLOCKS.has(el.tagName)) {
+      content = content.trimEnd();
+      return content ? content + '\n\n' : '';
+    }
+
+    return content;
+  }
+
+  let md = Array.from(clone.childNodes).map(toMD).join('');
+  // 折叠多余空行
+  md = md.replace(/\n{3,}/g, '\n\n').trim();
+
+  return { html, text: md };
+}
+
+
+function extractPostPayload(postEl) {
+  const cooked = postEl && postEl.querySelector('.cooked');
+  if (!cooked) return { html: '', text: '' };
+  return cookedToHtmlAndMarkdown(cooked);
+}
+
+function attachCopyHandler(el) {
+  if (!el || el.__tmHasCopyHandler) return;
+  el.title = '点击复制本楼内容（含图片）';
+  el.addEventListener('click', async (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const postEl = el.closest('.topic-post');
+    const payload = extractPostPayload(postEl);
+    const hasContent = (payload.text && payload.text.trim()) || (payload.html && payload.html.trim());
+    const old = el.textContent;
+
+    if (!hasContent) {
+      el.textContent = '无可复制内容';
+      setTimeout(() => (el.textContent = old), 1200);
+      return;
+    }
+
+    const ok = await copyToClipboardPayload(payload);
+    el.textContent = ok ? '已复制' : '复制失败';
+    setTimeout(() => (el.textContent = old), 1200);
+  });
+  el.__tmHasCopyHandler = true;
+}
+
+
+    // ---------------- 更稳健的获取楼主用户名（支持 fullname） ----------------
+    async function fetchOPInfoFromFirstPost() {
+      try {
+        const url = new URL(window.location.href);
+        const parts = url.pathname.split('/');
+        if (/^\d+$/.test(parts[parts.length - 1])) {
+          parts[parts.length - 1] = '1';
+        } else {
+          parts.push('1');
+        }
+        const firstUrl = url.origin + parts.join('/');
+
+        const resp = await fetch(firstUrl, { credentials: 'include' });
+        const html = await resp.text();
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+
+        const firstPost = doc.querySelector('.topic-post[data-post-number="1"]');
+        if (firstPost) {
+          const a = firstPost.querySelector('.topic-meta-data a[data-user-card]');
+          const username = a?.getAttribute('data-user-card')?.trim() || null;
+
+          // full name
+          let fullname = null;
+          const fullSpan = firstPost.querySelector('.topic-meta-data .full-name');
+          if (fullSpan) {
+            fullname = fullSpan.textContent.trim();
+          } else if (a?.getAttribute('title')) {
+            fullname = a.getAttribute('title').trim();
+          }
+
+          return { username, fullname };
+        }
+      } catch (e) {
+        console.error('fetchOPInfoFromFirstPost error:', e);
+      }
+      return { username: null, fullname: null };
+    }
+
+    // ---------------- topic-owner 兜底 ----------------
+    function hasNonEmptyPseudoContent(el, pseudo) {
+      try {
+        const cs = window.getComputedStyle(el, pseudo);
+        if (!cs) return false;
+        let content = cs.getPropertyValue('content');
+        if (!content) return false;
+        content = content.trim();
+        if (content === 'none' || content === 'normal') return false;
+        const stripped = content.replace(/^['"]|['"]$/g, '').trim();
+        return stripped.length > 0;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function isPostTopicOwner(post) {
+      try {
+        if (post.classList && post.classList.contains('topic-owner')) return true;
+        if (post.closest && post.closest('.topic-owner')) return true;
+
+        const candidates = [
+          post.querySelector('.topic-body .contents > .cooked'),
+          post.querySelector('.cooked'),
+          post.querySelector('.topic-meta-data .cooked'),
+          post.querySelector('.topic-meta-data'),
+        ];
+        for (const el of candidates) {
+          if (!el) continue;
+          if (hasNonEmptyPseudoContent(el, '::after')) return true;
+          if (hasNonEmptyPseudoContent(el, '::before')) return true;
+        }
+      } catch (e) {}
+      return false;
+    }
+
+    // ---------------- 处理楼层 ----------------
+    function processBatch(posts) {
+      if (!posts || posts.length === 0) return false;
+
+      for (const post of posts) {
+        try {
+          if (!post || post.nodeType !== 1) continue;
+          const numStr = post.getAttribute && post.getAttribute('data-post-number');
+          const floor = numStr ? parseInt(numStr, 10) : NaN;
+          if (!floor && floor !== 0) continue;
+
+          const anchor = getAnchorForPost(post);
+          if (!anchor) continue;
+
+          const curUser = getUserCardName(post);
+
+          const isOP =
+            (!!OP_NAME && curUser === OP_NAME) ||
+            isPostTopicOwner(post);
+
+          let label = null;
+          try {
+            label = anchor.querySelector(':scope > .tm-floor-label');
+          } catch (e) {
+            for (const ch of Array.from(anchor.children || [])) {
+              if (ch.classList && ch.classList.contains('tm-floor-label')) {
+                label = ch;
+                break;
+              }
+            }
+          }
+
+          const desiredText = makeLabelText(isOP, floor);
+
+          if (!label) {
+            label = document.createElement('button'); // 改为 button
+            label.type = 'button';
+            label.className = 'tm-floor-label' + (isOP ? ' tm-op' : '');
+            label.textContent = desiredText;
+            anchor.appendChild(label);
+            attachCopyHandler(label);
+          } else {
+            if (label.textContent !== desiredText) {
+              label.textContent = desiredText;
+            }
+            if (isOP) {
+              if (!label.classList.contains('tm-op')) label.classList.add('tm-op');
+            } else {
+              if (label.classList.contains('tm-op')) label.classList.remove('tm-op');
+            }
+            attachCopyHandler(label);
+          }
+        } catch (err) {
+          console.error('processBatch post error:', err);
+        }
+      }
+    }
+
+    function doProcessPosts(posts) {
+      if (!posts || posts.length === 0) return;
+      if (observer) observer.disconnect();
+      processBatch(posts);
+      if (observer) observer.observe(document.body, { childList: true, subtree: true });
+    }
+
+    // ---------------- 初始化 ----------------
+    async function initAll() {
+      const topicId = getTopicId();
+      if (!topicId) return;
+
+      // 优先从缓存中读取
+      if (!OP_NAME) {
+        const cached = loadCachedOP();
+        if (cached) {
+          OP_NAME = cached;
+          console.log('✅ 从缓存找到楼主用户名：', OP_NAME);
+        }
+      }
+
+      // 若缓存未命中，尝试从第一页获取
+      if (!OP_NAME) {
+        const { username, fullname } = await fetchOPInfoFromFirstPost();
+        if (username) {
+          OP_NAME = username;
+          saveCachedOP(OP_NAME, fullname);
+          console.log('✅ 成功找到楼主用户名并缓存：', OP_NAME);
+          if (fullname) console.log('ℹ️ 楼主全名：', fullname);
+        } else {
+          console.warn('⚠ 未能从 /1 获取楼主信息，尝试伪元素兜底…');
+          const el = document.querySelector('.topic-owner');
+          if (el) {
+            const content = window.getComputedStyle(el, '::after').content;
+            if (content && content !== 'none' && content !== '""') {
+              const a = el.querySelector('a[data-user-card]');
+              if (a) {
+                OP_NAME = a.getAttribute('data-user-card')?.trim() || null;
+                console.log('✅ 兜底从伪元素检测到楼主用户名：', OP_NAME);
+              }
+            }
+          }
+        }
+      }
+
+      const all = Array.from(document.querySelectorAll('.topic-post[data-post-number]'));
+      if (all.length) {
+        doProcessPosts(all);
+      }
+    }
+
+    // ---------------- MutationObserver ----------------
+    function onMutations(mutations) {
+      for (const m of mutations) {
+        if (m.addedNodes && m.addedNodes.length) {
+          for (const n of m.addedNodes) {
+            if (!n || n.nodeType !== 1) continue;
+            try {
+              if (n.matches && n.matches('.topic-post')) {
+                pendingPosts.add(n);
+              } else if (n.querySelectorAll) {
+                const inner = n.querySelectorAll('.topic-post');
+                if (inner && inner.length) inner.forEach(p => pendingPosts.add(p));
+              }
+            } catch (e) {}
+          }
+        }
+        try {
+          if (m.target && m.target.closest) {
+            const p = m.target.closest('.topic-post');
+            if (p) pendingPosts.add(p);
+          }
+        } catch (e) {}
+      }
+
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        const posts = Array.from(pendingPosts);
+        pendingPosts.clear();
+        if (posts.length) doProcessPosts(posts);
+      }, DEBOUNCE_MS);
+    }
+
+    observer = new MutationObserver(onMutations);
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    try {
+      initAll();
+    } catch (e) {
+      console.error('initAll error', e);
+    }
+  }
+
+  // ---------------- 楼层显示2（右侧边栏数字） ----------------
+  if (window.top !== window) {
+    return;
+  }
+
+  const styles = `
+  .topic-post {
+    position: relative;
+  }
+  .topic-post:before {
+    position: absolute;
+    top: 0;
+    right: calc(100% - 1px);
+    font-size: 13px;
+    min-width: var(--d-main-content-gap);
+    height: 2em;
+    line-height: 2em;
+    text-align: center;
+    color: var(--primary-medium);
+    border: 1px solid var(--content-border-color);
+    content: attr(data-post-number) !important;
+  }`;
+
+  if ('GM_addStyle' in window) {
+    GM_addStyle(styles);
+  } else if ('GM' in window) {
+    GM.addStyle(styles);
+  } else {
+    const style2 = document.createElement('style');
+    style2.textContent = styles;
+    document.head.appendChild(style2);
+  }
 
 
 
