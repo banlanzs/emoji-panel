@@ -94,7 +94,102 @@ document.addEventListener("click", (e) => {
 
 
 
+//-------------------------------------------------------------------//
+    // ---- 新增：拦截话题点击，在（点击楼层回复和标题除外）新标签打开 ----
+document.addEventListener('click', function (e) {
+  // 只处理左键普通点击
+  if (e.defaultPrevented) return;
+  if (e.button !== 0) return;
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
 
+  const a = e.target.closest('a[href]');
+  if (!a) return;
+
+  const href = a.href;
+  const currentHost = location.hostname;
+  const isSameOrigin = a.hostname === currentHost;
+
+  // 只处理白名单域名
+  const allowedDomains = [
+    'linux.do', 
+    'clochat.com', 
+    'idcflare.com',
+    'www.nodeloc.com'
+    ];
+  if (!isSameOrigin || !allowedDomains.includes(currentHost)) return;
+
+  // 当前话题页 & 点击的还是同一话题 -> 放行
+  const currentTopicMatch = location.pathname.match(/^\/t\/topic\/(\d+)(?:\/\d+)?$/);
+  const clickedTopicMatch = a.pathname.match(/^\/t\/topic\/(\d+)(?:\/(\d+))?$/);
+  if (a.closest('h1') && currentTopicMatch && clickedTopicMatch && currentTopicMatch[1] === clickedTopicMatch[1]) return;
+  if (currentTopicMatch && clickedTopicMatch && currentTopicMatch[1] === clickedTopicMatch[1]) return;
+
+  // 需要强制新标签打开的路径
+  const openInNewTabPatterns = [
+    /^\/t\/topic\/\d+(\/\d+)?(\?.*)?$/,
+    /^\/faq$/,
+    /^\/leaderboard$/,
+    /^\/tags$/,
+    /^\/about$/,
+    /^\/top$/,
+  ];
+
+  if (openInNewTabPatterns.some(p => p.test(a.pathname))) {
+    // 关键三连：阻止一切默认和冒泡
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+
+    // 显式设置属性，避免浏览器默认行为混淆
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+
+    // 打开新标签
+    window.open(href, '_blank', 'noopener');
+  }
+}, true);  // 捕获阶段
+
+
+//-------------------------------------------------------------------//
+    // ---- 新增：返回顶部按钮 ----
+    function addBackToTop() {
+        const btn = document.createElement('div');
+        btn.innerText = '↑ 顶部';
+        Object.assign(btn.style, {
+            position: 'fixed',
+            bottom: '75px',
+            right: '30px',
+            background: '#007aff',
+            color: '#fff',
+            padding: '10px 14px',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontSize: '14px',
+            boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+            zIndex: 9999,
+            opacity: 0,
+            transition: 'opacity 0.3s',
+        });
+        btn.addEventListener('click', () => {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+        document.body.appendChild(btn);
+
+        window.addEventListener('scroll', () => {
+            if (window.scrollY > 200) {
+                btn.style.opacity = 1;
+            } else {
+                btn.style.opacity = 0;
+            }
+        });
+    }
+
+    // 等待 DOM 就绪
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', addBackToTop);
+    } else {
+        addBackToTop();
+    }
 
 
 
